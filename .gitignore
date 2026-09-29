@@ -1,0 +1,7 @@
+llama
+*.gguf
+*.safetensors
+*.wasm
+example.ts
+tmp/*
+temp/*

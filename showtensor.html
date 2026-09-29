@@ -1,0 +1,978 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tensor / Quantizer Inspector</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: #edf0e9;
+      --surface: #fff;
+      --ink: #17241e;
+      --muted: #68766d;
+      --line: #d7ded5;
+      --accent: #176b50;
+      --highlight: #c6f36a;
+      --error: #ad432f;
+      --mono: Consolas, "Courier New", monospace;
+      font-family: "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--canvas);
+    }
+
+    * { box-sizing: border-box; }
+    body { min-width: 760px; margin: 0; }
+    button, input { font: inherit; }
+    main { max-width: 1680px; margin: auto; padding: 24px clamp(16px, 2vw, 32px) 48px; }
+    header { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+    h1 { margin: 0; font-size: 22px; font-weight: 700; }
+    header span, .eyebrow { color: var(--muted); font: 12px var(--mono); }
+    .workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; padding-top: 12px; }
+    section { min-width: 0; }
+    .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+    h2 { margin: 0; font-size: 17px; }
+    .file-panel { overflow: hidden; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); }
+    .drop-zone { display: flex; min-height: 72px; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 20px; border-bottom: 1px dashed #98aaa0; transition: background .15s, border-color .15s; }
+    .file-panel.is-over .drop-zone { border-color: var(--accent); background: #e5f3e9; }
+    .drop-zone strong { display: block; margin-bottom: 5px; font-size: 14px; }
+    .drop-zone small { color: var(--muted); font-size: 12px; }
+    button.choose { flex: none; padding: 9px 13px; border: 1px solid var(--accent); border-radius: 4px; color: var(--accent); background: #fff; cursor: pointer; font-size: 13px; font-weight: 600; }
+    button.choose:hover, button.choose:focus-visible { background: #e5f3e9; }
+    .header-actions { justify-self: end; }
+    .inspect-button { padding: 9px 18px; border: 1px solid var(--accent); border-radius: 4px; color: #fff; background: var(--accent); cursor: pointer; font-size: 13px; font-weight: 600; }
+    .inspect-button:hover { background: #11583f; }
+    .inspect-button:disabled { cursor: not-allowed; opacity: .5; }
+    [hidden] { display: none !important; }
+    .status { min-height: 37px; margin: 0; padding: 11px 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+    .status.inspect-status { min-height: 0; padding: 0; }
+    .status.inspect-status:not(:empty) { padding-top: 12px; }
+    .file-panel > .status { padding-right: 20px; padding-left: 20px; }
+    .tensor-status-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; padding: 6px 20px; }
+    .tensor-status-row > .status { flex: 1 1 160px; min-width: 0; min-height: 0; padding: 0; }
+    .tensor-filters { display: flex; gap: 6px; }
+    .tensor-filter { height: 28px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink); background: #fff; cursor: pointer; font-size: 12px; white-space: nowrap; }
+    .tensor-filter:hover:not(:disabled), .tensor-filter:focus-visible { border-color: var(--accent); }
+    .tensor-filter[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: #e5f3e9; }
+    .tensor-filter:disabled { cursor: not-allowed; opacity: .5; }
+    .status.error { color: var(--error); }
+    .table-wrap { overflow-x: auto; border-top: 1px solid var(--line); }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+    th { color: var(--muted); background: #e5ebe4; font-weight: 600; }
+    td { background: var(--surface); font-family: var(--mono); }
+    .tensor-row, .quantizer-row:not(.is-incompatible) { cursor: pointer; }
+    .tensor-row:hover td, .tensor-row:focus-visible td,
+    .quantizer-row:not(.is-incompatible):hover td, .quantizer-row:focus-visible td { background: #edf6e7; }
+    .tensor-row[aria-selected="true"] td, .quantizer-row[aria-selected="true"] td { background: #e1f0d4; }
+    .quantizer-row.is-incompatible td { color: #9aa49d; background: #f2f4f1; }
+    .quantizer-row.is-incompatible[aria-selected="true"] td { background: #dfe4dd; }
+    .quantizer-row[aria-selected="true"] td:first-child { box-shadow: inset 3px 0 var(--accent); }
+    .quantizer-row.is-incompatible { cursor: not-allowed; }
+    td:first-child { max-width: 280px; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+    .empty { padding: 26px 14px; color: var(--muted); font-size: 13px; text-align: center; }
+    .results-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+    .results-head h1 { overflow-wrap: anywhere; }
+    .results-head .status { min-height: 0; padding: 6px 0 0; }
+    .close-button { width: 34px; height: 34px; flex: none; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: #fff; color: var(--ink); cursor: pointer; font-size: 23px; line-height: 1; }
+    .close-button:hover { border-color: var(--accent); color: var(--accent); }
+    .results-table { max-height: calc(100vh - 155px); margin-top: 18px; overflow: auto; border: 1px solid var(--line); }
+    .results-table table { width: max-content; }
+    .results-table th, .results-table td { width: 72px; min-width: 72px; padding: 12px 3px; font-variant-numeric: tabular-nums; }
+    .results-table thead th { position: sticky; top: 0; z-index: 1; }
+    .results-table th:first-child { position: sticky; left: 0; z-index: 2; width: auto; min-width: 0; padding: 12px; }
+    .results-table tbody th { background: linear-gradient(to right, #cde9f7 var(--bpw-fill), #e5ebe4 var(--bpw-fill)); font-family: var(--mono); text-align: left; }
+    .results-table tbody td { text-align: right; }
+    .quantizer-link { border: 0; padding: 0; color: var(--accent); background: transparent; cursor: pointer; font: inherit; font-weight: 600; }
+    .quantizer-link:hover, .quantizer-link:focus-visible { text-decoration: underline; }
+    .block-overlay { position: fixed; z-index: 6; inset: 0; display: flex; flex-direction: column; background: var(--canvas); }
+    .block-head { display: flex; min-height: 70px; align-items: center; justify-content: space-between; gap: 20px; padding: 12px 24px; border-bottom: 1px solid var(--line); }
+    .block-head h2 { font-size: 18px; }
+    .block-head .status { min-height: 0; padding: 4px 0 0; }
+    .block-actions { display: flex; align-items: center; gap: 10px; }
+    .view-button { min-width: 90px; height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink); background: #fff; cursor: pointer; font-size: 13px; }
+    .view-button:hover { border-color: var(--accent); color: var(--accent); }
+    .view-button:disabled { cursor: wait; opacity: .5; }
+    .rotate-button { min-width: 34px; width: 34px; padding: 0; font-size: 21px; }
+    .block-canvas { position: relative; flex: 1; min-height: 0; overflow: hidden; touch-action: none; }
+    .block-canvas canvas { display: block; }
+    .block-status { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+    .block-tooltip { position: absolute; z-index: 1; padding: 7px 10px; border: 1px solid var(--line); background: #fff; font: 12px var(--mono); pointer-events: none; white-space: nowrap; }
+    .waiting-overlay { position: fixed; z-index: 5; inset: 0; display: grid; place-items: center; background: rgb(23 36 30 / 48%); }
+    .waiting-overlay span { padding: 20px 30px; border: 1px solid var(--line); border-radius: 5px; background: #fff; font-size: 15px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <main>
+    <div id="setup-view">
+      <header>
+        <h1>Tensor / Quantizer Inspector</h1>
+        <button id="inspect-button" class="inspect-button" type="button" disabled>Inspect</button>
+        <div class="header-actions"><span>SAFETENSORS / GGUF + WASM</span></div>
+      </header>
+      <p id="inspect-status" class="status inspect-status" role="status" aria-live="polite"></p>
+      <div class="workspace">
+      <section aria-labelledby="tensor-title">
+        <div class="section-head"><h2 id="tensor-title">Tensors</h2><span class="eyebrow">01 / SOURCE</span></div>
+        <div class="file-panel">
+          <div id="tensor-drop" class="drop-zone">
+            <div><strong>Drop .safetensors or .gguf</strong><small>F32, F16, BF16 · FP8 in safetensors</small></div>
+            <button id="tensor-choose" class="choose" type="button">Choose file</button>
+            <input id="tensor-file" type="file" accept=".safetensors,.gguf" hidden>
+          </div>
+          <div class="tensor-status-row">
+            <p id="tensor-status" class="status" role="status" aria-live="polite">No tensor file loaded</p>
+            <div class="tensor-filters" role="group" aria-label="Tensor filters">
+              <button id="weight-only" class="tensor-filter" type="button" aria-pressed="false" disabled>Weight only</button>
+              <button id="multi-dim" class="tensor-filter" type="button" aria-pressed="false" disabled>Multi-dim</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table aria-label="Convertible tensors">
+              <thead><tr><th scope="col">Name</th><th scope="col">Shape</th><th scope="col">Datatype</th></tr></thead>
+              <tbody id="tensor-list"><tr><td class="empty" colspan="3">No tensors loaded</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+      <section aria-labelledby="quantizer-title">
+        <div class="section-head"><h2 id="quantizer-title">Quantizers</h2><span class="eyebrow">02 / WASM</span></div>
+        <div class="file-panel">
+          <div id="wasm-drop" class="drop-zone">
+            <div><strong>Drop a .wasm file</strong><small>Types with quantize and dequantize exports</small></div>
+            <button id="wasm-choose" class="choose" type="button">Choose file</button>
+            <input id="wasm-file" type="file" accept=".wasm,application/wasm" hidden>
+          </div>
+          <p id="wasm-status" class="status" role="status" aria-live="polite">No WASM file loaded</p>
+          <div class="table-wrap">
+            <table aria-label="Available quantizers">
+              <thead><tr><th scope="col">Type</th><th scope="col">Elements / block</th><th scope="col">Block bytes</th></tr></thead>
+              <tbody id="wasm-list"><tr><td class="empty" colspan="3">No quantizers loaded</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+      </div>
+    </div>
+    <div id="results-view" hidden>
+      <div class="results-head">
+        <div><h1>Row RMSE</h1><p id="results-meta" class="status"></p></div>
+        <button id="close-results" class="close-button" type="button" aria-label="Back to tensors" title="Back to tensors">×</button>
+      </div>
+      <div id="results-table" class="results-table"></div>
+    </div>
+  </main>
+  <div id="block-overlay" class="block-overlay" role="dialog" aria-modal="true" aria-labelledby="block-title" hidden>
+    <div class="block-head">
+      <div><h2 id="block-title"></h2><p id="block-meta" class="status"></p></div>
+      <div class="block-actions">
+        <button id="toggle-block-view" class="view-button" type="button" disabled>Top view</button>
+        <button id="rotate-block-view" class="view-button rotate-button" type="button" aria-label="Rotate view 90 degrees" title="Rotate view 90 degrees" hidden disabled>↻</button>
+        <button id="close-block" class="close-button" type="button" aria-label="Close block view" title="Close block view">×</button>
+      </div>
+    </div>
+    <div id="block-canvas" class="block-canvas">
+      <p id="block-status" class="block-status status" role="status" aria-live="polite"></p>
+      <div id="block-tooltip" class="block-tooltip" hidden></div>
+    </div>
+  </div>
+  <div id="waiting-overlay" class="waiting-overlay" role="status" aria-live="polite" hidden><span>Waiting...</span></div>
+  <script type="importmap">
+    { "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.1/examples/jsm/"
+    } }
+  </script>
+  <script src="./load_quantizer.js"></script>
+  <script>
+    "use strict";
+
+    const typeSizes = { F32: 4, F16: 2, BF16: 2, F8_E4M3FN: 1, F8_E4M3FNUZ: 1, F8_E5M2: 1, F8_E5M2FNUZ: 1 };
+
+    class SafeTensor {
+      constructor(file, name, shape, datatype, offset, size) {
+        this.file = file;
+        this.name = name;
+        this.shape = shape;
+        this.datatype = datatype;
+        this.offset = offset;
+        this.size = size;
+      }
+    }
+
+    async function parseSafeTensors(file) {
+      if (file.size < 8) throw new Error("Missing safetensors header length");
+      const prefix = new DataView(await file.slice(0, 8).arrayBuffer());
+      const headerLength = Number(prefix.getBigUint64(0, true));
+      if (!Number.isSafeInteger(headerLength) || headerLength > file.size - 8) {
+        throw new Error("Invalid safetensors header length");
+      }
+
+      const dataStart = 8 + headerLength;
+      const header = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await file.slice(8, dataStart).arrayBuffer()));
+      if (!header || typeof header !== "object" || Array.isArray(header)) throw new Error("Invalid safetensors header");
+
+      const tensors = new Map();
+      for (const [name, info] of Object.entries(header)) {
+        if (name === "__metadata__") continue;
+        if (!info || typeof info !== "object" || !Array.isArray(info.shape)
+          || typeof info.dtype !== "string" || !Array.isArray(info.data_offsets) || info.data_offsets.length !== 2) {
+          throw new Error(`Invalid tensor metadata: ${name}`);
+        }
+        const [start, end] = info.data_offsets;
+        if (!info.shape.every((dimension) => Number.isSafeInteger(dimension) && dimension >= 0)
+          || !Number.isSafeInteger(start) || !Number.isSafeInteger(end)
+          || start < 0 || end < start || end > file.size - dataStart) {
+          throw new Error(`Invalid tensor shape or offsets: ${name}`);
+        }
+        const size = end - start;
+        if (Object.hasOwn(typeSizes, info.dtype)) {
+          const count = info.shape.reduce((product, dimension) => product * dimension, 1);
+          if (!Number.isSafeInteger(count) || count * typeSizes[info.dtype] !== size) {
+            throw new Error(`Tensor byte size does not match shape: ${name}`);
+          }
+        }
+        tensors.set(name, new SafeTensor(file, name, info.shape, info.dtype, dataStart + start, size));
+      }
+      return tensors;
+    }
+
+    async function parseGguf(file) {
+      let position = 0;
+      let chunkStart = 0;
+      let chunk = new ArrayBuffer(0);
+      const read = async (length) => {
+        if (!Number.isSafeInteger(length) || length < 0 || !Number.isSafeInteger(position + length)
+          || position + length > file.size) throw new Error("Invalid GGUF header");
+        if (position < chunkStart || position + length > chunkStart + chunk.byteLength) {
+          chunkStart = position;
+          chunk = await file.slice(position, position + Math.max(length, 65536)).arrayBuffer();
+        }
+        const view = new DataView(chunk, position - chunkStart, length);
+        position += length;
+        return view;
+      };
+      const skip = (length) => {
+        if (!Number.isSafeInteger(length) || length < 0 || !Number.isSafeInteger(position + length)
+          || position + length > file.size) throw new Error("Invalid GGUF header");
+        position += length;
+      };
+      const readU32 = async () => (await read(4)).getUint32(0, true);
+      const readU64 = async () => {
+        const value = Number((await read(8)).getBigUint64(0, true));
+        if (!Number.isSafeInteger(value)) throw new Error("GGUF integer exceeds safe range");
+        return value;
+      };
+      const decoder = new TextDecoder("utf-8", { fatal: true });
+      const readString = async () => decoder.decode(await read(await readU64()));
+      const valueSizes = [1, 1, 2, 2, 4, 4, 4, 1, 0, 0, 8, 8, 8];
+      const skipValue = async (type) => {
+        if (type === 8) {
+          skip(await readU64());
+        } else if (type === 9) {
+          const elementType = await readU32();
+          const count = await readU64();
+          if (elementType === 8) {
+            for (let index = 0; index < count; index++) skip(await readU64());
+          } else {
+            if (!valueSizes[elementType]) throw new Error("Unsupported GGUF metadata type");
+            skip(count * valueSizes[elementType]);
+          }
+        } else {
+          if (!valueSizes[type]) throw new Error("Unsupported GGUF metadata type");
+          skip(valueSizes[type]);
+        }
+      };
+
+      if ((await read(4)).getUint32(0, false) !== 0x47475546) throw new Error("Invalid GGUF magic");
+      const version = await readU32();
+      if (version !== 2 && version !== 3) throw new Error(`Unsupported GGUF version: ${version}`);
+      const tensorCount = await readU64();
+      const metadataCount = await readU64();
+      let alignment = 32;
+      for (let index = 0; index < metadataCount; index++) {
+        const key = await readString();
+        const type = await readU32();
+        if (key === "general.alignment") {
+          if (type !== 4) throw new Error("Invalid GGUF alignment type");
+          alignment = await readU32();
+          if (!alignment || (alignment & (alignment - 1))) throw new Error("Invalid GGUF alignment");
+        } else {
+          await skipValue(type);
+        }
+      }
+
+      const types = { 0: "F32", 1: "F16", 30: "BF16" };
+      const entries = [];
+      for (let index = 0; index < tensorCount; index++) {
+        const name = await readString();
+        const dimensions = await readU32();
+        if (!dimensions || dimensions > 4) throw new Error(`Invalid GGUF tensor dimensions: ${name}`);
+        const shape = [];
+        for (let axis = 0; axis < dimensions; axis++) shape.push(await readU64());
+        const type = await readU32();
+        const relativeOffset = await readU64();
+        entries.push({ name, shape, type, relativeOffset });
+      }
+
+      const dataStart = position + (alignment - position % alignment) % alignment;
+      const tensors = new Map();
+      for (const { name, shape, type, relativeOffset } of entries) {
+        if (!Object.hasOwn(types, type)) continue;
+        const datatype = types[type];
+        const count = shape.reduce((product, dimension) => product * dimension, 1);
+        const size = count * typeSizes[datatype];
+        const offset = dataStart + relativeOffset;
+        if (!Number.isSafeInteger(size) || !Number.isSafeInteger(offset)
+          || relativeOffset % alignment !== 0 || offset > file.size || size > file.size - offset) {
+          throw new Error(`Invalid GGUF tensor offset or shape: ${name}`);
+        }
+        tensors.set(name, new SafeTensor(file, name, shape, datatype, offset, size));
+      }
+      return { tensors, total: tensorCount };
+    }
+
+    function decodeFloat8(bits, datatype) {
+      const unsignedZero = datatype.endsWith("FNUZ");
+      if (unsignedZero && bits === 0x80) return NaN;
+      const exponentBits = datatype.startsWith("F8_E4") ? 4 : 5;
+      const mantissaBits = 7 - exponentBits;
+      const exponentMask = (1 << exponentBits) - 1;
+      const fraction = bits & ((1 << mantissaBits) - 1);
+      const exponent = (bits >> mantissaBits) & exponentMask;
+      const bias = (1 << (exponentBits - 1)) - 1 + Number(unsignedZero);
+      const sign = bits & 0x80 ? -1 : 1;
+      if (exponent === 0) return sign * (fraction ? 2 ** (1 - bias) * fraction / (1 << mantissaBits) : 0);
+      if (!unsignedZero && exponent === exponentMask) {
+        if (datatype === "F8_E5M2") return fraction ? NaN : sign * Infinity;
+        if (fraction === (1 << mantissaBits) - 1) return NaN;
+      }
+      return sign * 2 ** (exponent - bias) * (1 + fraction / (1 << mantissaBits));
+    }
+
+    async function safeTensorToFloat32(tensor) {
+      const bytesPerValue = typeSizes[tensor.datatype];
+      if (!bytesPerValue || !tensor.shape.length) throw new Error("Tensor type or shape cannot be converted");
+      const n_per_row = tensor.shape[0];
+      const nrows = tensor.shape.slice(1).reduce((product, dimension) => product * dimension, 1);
+      const count = Math.min(128, nrows) * n_per_row;
+      if (!Number.isSafeInteger(count) || count * bytesPerValue > tensor.size) throw new Error("Invalid tensor dimensions");
+
+      const buffer = await tensor.file.slice(tensor.offset, tensor.offset + count * bytesPerValue).arrayBuffer();
+      const view = new DataView(buffer);
+      const result = new Float32Array(count);
+      const scratch = new DataView(new ArrayBuffer(4));
+      for (let index = 0; index < count; index++) {
+        const byteIndex = index * bytesPerValue;
+        switch (tensor.datatype) {
+          case "F32": result[index] = view.getFloat32(byteIndex, true); break;
+          case "BF16":
+            scratch.setUint32(0, view.getUint16(byteIndex, true) << 16, true);
+            result[index] = scratch.getFloat32(0, true);
+            break;
+          case "F16": {
+            const bits = view.getUint16(byteIndex, true);
+            const exponent = (bits >> 10) & 31;
+            const fraction = bits & 1023;
+            const sign = bits & 0x8000 ? -1 : 1;
+            result[index] = exponent === 31 ? (fraction ? NaN : sign * Infinity)
+              : exponent === 0 ? sign * 2 ** -14 * fraction / 1024
+              : sign * 2 ** (exponent - 15) * (1 + fraction / 1024);
+            break;
+          }
+          default: result[index] = decodeFloat8(view.getUint8(byteIndex), tensor.datatype);
+        }
+      }
+      return result;
+    }
+
+    const tensorList = document.querySelector("#tensor-list");
+    const wasmList = document.querySelector("#wasm-list");
+    let tensorRequest = 0;
+    let wasmRequest = 0;
+    let selectedTensor = null;
+    let tensorSummary = null;
+    let chartRequest = 0;
+    let disposeBlockChart = null;
+
+    function addCell(row, value) {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.append(cell);
+    }
+
+    function showEmpty(list, colspan, message) {
+      list.replaceChildren();
+      const row = document.createElement("tr");
+      const cell = document.createElement("td");
+      cell.colSpan = colspan;
+      cell.className = "empty";
+      cell.textContent = message;
+      row.append(cell);
+      list.append(row);
+    }
+
+    function updateInspectAvailability() {
+      document.querySelector("#inspect-button").disabled = !selectedTensor
+        || !wasmList.querySelector('.quantizer-row[aria-selected="true"]:not(.is-incompatible)');
+    }
+
+    function updateQuantizerCompatibility() {
+      for (const row of wasmList.querySelectorAll(".quantizer-row")) {
+        const incompatible = selectedTensor !== null
+          && selectedTensor.shape[0] % Number(row.dataset.nPerBlock) !== 0;
+        row.classList.toggle("is-incompatible", incompatible);
+        row.setAttribute("aria-disabled", String(incompatible));
+        row.tabIndex = incompatible ? -1 : 0;
+        row.title = incompatible ? `Requires n_per_row divisible by ${row.dataset.nPerBlock}` : "";
+      }
+      updateInspectAvailability();
+    }
+
+    function selectTensor(tensor, row) {
+      selectedTensor = tensor;
+      for (const item of tensorList.querySelectorAll(".tensor-row")) item.setAttribute("aria-selected", String(item === row));
+      updateQuantizerCompatibility();
+    }
+
+    function filterTensors() {
+      const weightOnly = document.querySelector("#weight-only").getAttribute("aria-pressed") === "true";
+      const multiDim = document.querySelector("#multi-dim").getAttribute("aria-pressed") === "true";
+      let visible = 0;
+      for (const row of tensorList.querySelectorAll(".tensor-row")) {
+        row.hidden = (weightOnly && !row.tensor.name.endsWith(".weight"))
+          || (multiDim && row.tensor.shape.length < 2);
+        if (!row.hidden) visible++;
+        else if (row.getAttribute("aria-selected") === "true") {
+          selectedTensor = null;
+          row.setAttribute("aria-selected", "false");
+        }
+      }
+      tensorList.querySelector(".filter-empty")?.remove();
+      if (!visible && tensorList.querySelector(".tensor-row")) {
+        const row = document.createElement("tr");
+        row.className = "filter-empty";
+        const cell = document.createElement("td");
+        cell.className = "empty";
+        cell.colSpan = 3;
+        cell.textContent = "No tensors match filters";
+        row.append(cell);
+        tensorList.append(row);
+      }
+      const count = weightOnly || multiDim
+        ? `${visible} shown / ${tensorSummary.convertible} convertible`
+        : `${tensorSummary.convertible} convertible`;
+      document.querySelector("#tensor-status").textContent =
+        `${tensorSummary.name} · ${count} / ${tensorSummary.total} tensors`;
+      updateQuantizerCompatibility();
+    }
+
+    async function loadTensorFile(file) {
+      if (!file) return;
+      const request = ++tensorRequest;
+      selectedTensor = null;
+      tensorSummary = null;
+      for (const button of document.querySelectorAll(".tensor-filter")) {
+        button.setAttribute("aria-pressed", "false");
+        button.disabled = true;
+      }
+      updateQuantizerCompatibility();
+      showEmpty(tensorList, 3, "Loading...");
+      const status = document.querySelector("#tensor-status");
+      status.className = "status";
+      status.textContent = `Loading ${file.name}...`;
+      try {
+        const isGguf = file.name.toLowerCase().endsWith(".gguf");
+        if (!isGguf && !file.name.toLowerCase().endsWith(".safetensors")) {
+          throw new Error("Choose a .safetensors or .gguf file");
+        }
+        const parsed = isGguf ? await parseGguf(file) : await parseSafeTensors(file);
+        const tensors = isGguf ? parsed.tensors : parsed;
+        if (request !== tensorRequest) return;
+        const supported = [...tensors.values()].filter((tensor) => Object.hasOwn(typeSizes, tensor.datatype) && tensor.shape.length);
+        tensorList.replaceChildren();
+        for (const tensor of supported) {
+          const row = document.createElement("tr");
+          row.className = "tensor-row";
+          row.tensor = tensor;
+          row.tabIndex = 0;
+          row.title = tensor.name;
+          row.setAttribute("aria-selected", "false");
+          for (const value of [tensor.name, `[${tensor.shape.join(", ")}]`, tensor.datatype]) addCell(row, value);
+          row.addEventListener("click", () => selectTensor(tensor, row));
+          row.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectTensor(tensor, row); }
+          });
+          tensorList.append(row);
+        }
+        if (!supported.length) showEmpty(tensorList, 3, "No convertible tensors");
+        tensorSummary = { name: file.name, convertible: supported.length, total: isGguf ? parsed.total : tensors.size };
+        for (const button of document.querySelectorAll(".tensor-filter")) button.disabled = !supported.length;
+        filterTensors();
+      } catch (error) {
+        if (request !== tensorRequest) return;
+        showEmpty(tensorList, 3, "No tensors loaded");
+        status.className = "status error";
+        status.textContent = `Failed to load: ${error.message}`;
+      }
+    }
+
+    async function loadWasmFile(file) {
+      if (!file) return;
+      const request = ++wasmRequest;
+      showEmpty(wasmList, 3, "Loading...");
+      updateInspectAvailability();
+      const status = document.querySelector("#wasm-status");
+      status.className = "status";
+      status.textContent = `Loading ${file.name}...`;
+      try {
+        if (!file.name.toLowerCase().endsWith(".wasm")) throw new Error("Choose a .wasm file");
+        const quantizers = await loadQuantizer(await file.arrayBuffer());
+        if (request !== wasmRequest) return;
+        const supported = Object.values(quantizers).filter((item) =>
+          typeof item.quantizer === "function" && typeof item.dequantizer === "function");
+        wasmList.replaceChildren();
+        for (const item of supported) {
+          const row = document.createElement("tr");
+          row.className = "quantizer-row";
+          row.quantizer = item;
+          row.dataset.nPerBlock = item.n_per_block;
+          row.setAttribute("aria-selected", "false");
+          for (const value of [item.name, item.n_per_block, item.block_size]) addCell(row, value);
+          const toggle = () => {
+            if (row.classList.contains("is-incompatible")) return;
+            row.setAttribute("aria-selected", String(row.getAttribute("aria-selected") !== "true"));
+            updateInspectAvailability();
+          };
+          row.addEventListener("click", toggle);
+          row.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(); }
+          });
+          wasmList.append(row);
+        }
+        updateQuantizerCompatibility();
+        if (!supported.length) showEmpty(wasmList, 3, "No bidirectional quantizers");
+        status.textContent = `${file.name} · ${supported.length} quantizer${supported.length === 1 ? "" : "s"} available`;
+      } catch (error) {
+        if (request !== wasmRequest) return;
+        showEmpty(wasmList, 3, "No quantizers loaded");
+        updateInspectAvailability();
+        status.className = "status error";
+        status.textContent = `Failed to load: ${error.message}`;
+      }
+    }
+
+    function setupDropZone(kind, loadFile) {
+      const zone = document.querySelector(`#${kind}-drop`).closest(".file-panel");
+      const input = document.querySelector(`#${kind}-file`);
+      document.querySelector(`#${kind}-choose`).addEventListener("click", () => input.click());
+      input.addEventListener("change", () => { loadFile(input.files[0]); input.value = ""; });
+      for (const name of ["dragenter", "dragover"]) zone.addEventListener(name, (event) => {
+        event.preventDefault();
+        zone.classList.add("is-over");
+      });
+      zone.addEventListener("dragleave", (event) => {
+        if (!zone.contains(event.relatedTarget)) zone.classList.remove("is-over");
+      });
+      zone.addEventListener("drop", (event) => {
+        event.preventDefault();
+        zone.classList.remove("is-over");
+        loadFile(event.dataTransfer.files[0]);
+      });
+    }
+
+    const formatError = (value) => Number.isFinite(value) ? value.toExponential(2) : String(value);
+
+    function renderResults(tensor, quantizers, results, nrows, width) {
+      const values = results.flatMap(({ error }) => error.row_error).filter(Number.isFinite);
+      const minimum = values.length ? Math.min(...values) : 0;
+      const maximum = values.length ? Math.max(...values) : 0;
+      const scale = Math.min(...values.filter((value) => value > 0));
+      const logMinimum = Math.log1p(minimum / scale);
+      const logRange = Math.log1p(maximum / scale) - logMinimum;
+      const table = document.createElement("table");
+      table.setAttribute("aria-label", "RMSE by quantizer and row");
+      const head = document.createElement("thead");
+      const heading = document.createElement("tr");
+      const rowHeading = document.createElement("th");
+      rowHeading.scope = "col";
+      rowHeading.textContent = "Quantizer";
+      heading.append(rowHeading);
+      for (let index = 0; index < nrows; index++) {
+        const cell = document.createElement("th");
+        cell.scope = "col";
+        cell.textContent = `Row ${index}`;
+        heading.append(cell);
+      }
+      head.append(heading);
+      table.append(head);
+      let colorMinimum = Infinity;
+      let colorMaximum = 0;
+      for (const { error } of results) for (const block of error.blk32_error) for (const value of block) {
+        if (!Number.isFinite(value)) continue;
+        if (value > 0) colorMinimum = Math.min(colorMinimum, value);
+        colorMaximum = Math.max(colorMaximum, value);
+      }
+      const body = document.createElement("tbody");
+      for (let index = 0; index < quantizers.length; index++) {
+        const row = document.createElement("tr");
+        const label = document.createElement("th");
+        label.scope = "row";
+        const { error, bpw } = results[index];
+        label.title = `BPW: ${bpw.toFixed(2)}`;
+        label.style.setProperty("--bpw-fill", `${Math.log10(Math.max(1, Math.min(10, bpw))) * 100}%`);
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "quantizer-link";
+        button.textContent = quantizers[index].name;
+        button.title = label.title;
+        button.addEventListener("click", () => openBlockChart(quantizers[index], error, colorMinimum, colorMaximum));
+        label.append(button);
+        row.append(label);
+        for (const value of error.row_error) {
+          const cell = document.createElement("td");
+          cell.textContent = formatError(value);
+          cell.title = String(value);
+          if (Number.isFinite(value)) {
+            const ratio = logRange > 0 ? (Math.log1p(value / scale) - logMinimum) / logRange : 0;
+            cell.style.backgroundColor = `hsl(${135 - ratio * 125} 65% 88%)`;
+          } else {
+            cell.style.backgroundColor = "#e5ebe4";
+          }
+          row.append(cell);
+        }
+        body.append(row);
+      }
+      table.append(body);
+      document.querySelector("#results-table").replaceChildren(table);
+      document.querySelector("#results-meta").textContent = `${tensor.name} · ${nrows} rows × ${width} values · RMSE ${formatError(minimum)} to ${formatError(maximum)}`;
+    }
+
+    async function openBlockChart(quantizer, error, colorMinimum, colorMaximum) {
+      const request = ++chartRequest;
+      if (disposeBlockChart) disposeBlockChart();
+      disposeBlockChart = null;
+      const overlay = document.querySelector("#block-overlay");
+      const host = document.querySelector("#block-canvas");
+      const status = document.querySelector("#block-status");
+      const tooltip = document.querySelector("#block-tooltip");
+      const viewButton = document.querySelector("#toggle-block-view");
+      const rotateButton = document.querySelector("#rotate-block-view");
+      const rows = error.row_error.length;
+      const blocks = error.blk32_error.length;
+      document.querySelector("#block-title").textContent = `${quantizer.name} · 32-Element Block RMSE`;
+      document.querySelector("#block-meta").textContent = `${rows} rows × ${error.block_error.length} blocks · ${quantizer.n_per_block} elements / block`;
+      status.className = "block-status status";
+      status.textContent = "Loading 3D...";
+      status.hidden = false;
+      viewButton.disabled = true;
+      viewButton.textContent = "Top view";
+      rotateButton.disabled = true;
+      rotateButton.hidden = true;
+      overlay.hidden = false;
+
+      try {
+        const [THREE, { OrbitControls }] = await Promise.all([
+          import("three"), import("three/addons/controls/OrbitControls.js"),
+        ]);
+        if (request !== chartRequest) return;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        host.prepend(renderer.domElement);
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color("#edf0e9");
+        scene.add(new THREE.HemisphereLight(0xffffff, 0x9daea1, 2.2));
+        const light = new THREE.DirectionalLight(0xffffff, 2);
+        light.position.set(-8, 15, 10);
+        scene.add(light);
+
+        let smallestPositive = Infinity;
+        let largest = 0;
+        for (const block of error.blk32_error) for (const value of block) {
+          if (!Number.isFinite(value)) continue;
+          if (value > 0) smallestPositive = Math.min(smallestPositive, value);
+          largest = Math.max(largest, value);
+        }
+        const logMaximum = smallestPositive === Infinity ? 0 : Math.log1p(largest / smallestPositive);
+        const colorLogMaximum = colorMinimum === Infinity ? 0 : Math.log1p(colorMaximum / colorMinimum);
+        const cellSize = Math.max(0.22, Math.min(1.1, 16 / Math.max(blocks, rows)));
+        const blockSpan = blocks * cellSize;
+        const rowSpan = rows * cellSize;
+        const geometry = new THREE.BoxGeometry(1, 1, 1);
+        const material = new THREE.MeshStandardMaterial({ roughness: 0.7 });
+        const bars = new THREE.InstancedMesh(geometry, material, blocks * rows);
+        const transform = new THREE.Object3D();
+        const color = new THREE.Color();
+        for (let block = 0; block < blocks; block++) for (let row = 0; row < rows; row++) {
+          const value = error.blk32_error[block][row];
+          const ratio = Number.isFinite(value) && logMaximum > 0
+            ? Math.log1p(value / smallestPositive) / logMaximum : 0;
+          const height = 0.04 + 3 * ratio;
+          transform.position.set((block - (blocks - 1) / 2) * cellSize, height / 2,
+            (row - (rows - 1) / 2) * cellSize);
+          transform.scale.set(cellSize * 0.94, height, cellSize * 0.94);
+          transform.updateMatrix();
+          const instance = block * rows + row;
+          bars.setMatrixAt(instance, transform.matrix);
+          const colorRatio = Number.isFinite(value) && colorLogMaximum > 0
+            ? Math.log1p(value / colorMinimum) / colorLogMaximum : 0;
+          color.setHSL((135 - colorRatio * 125) / 360, 0.65, 0.52);
+          bars.setColorAt(instance, Number.isFinite(value) ? color : new THREE.Color("#9aa49d"));
+        }
+        bars.instanceMatrix.needsUpdate = true;
+        if (bars.instanceColor) bars.instanceColor.needsUpdate = true;
+        scene.add(bars);
+        const grid = new THREE.GridHelper(Math.max(blockSpan, rowSpan) + cellSize,
+          Math.min(40, Math.max(blocks, rows) + 1), 0x98aaa0, 0xd1dbd3);
+        grid.position.y = -0.04;
+        scene.add(grid);
+
+        const origin = new THREE.Vector3(-blockSpan / 2, 0, -rowSpan / 2);
+        const axes = [
+          new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), origin, blockSpan + 0.6, 0x176b50, 0.35, 0.18),
+          new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), origin, 3.6, 0xad432f, 0.35, 0.18),
+          new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), origin, rowSpan + 0.6, 0x326c98, 0.35, 0.18),
+        ];
+        for (const axis of axes) scene.add(axis);
+        const tickPoints = [];
+        const blockMarks = [];
+        for (let block = 0; block < blocks; block += Math.max(1, Math.ceil((blocks - 1) / 6))) blockMarks.push(block);
+        if (blockMarks.at(-1) !== blocks - 1) blockMarks.push(blocks - 1);
+        const rowMarks = [];
+        for (let row = 0; row < rows; row += Math.max(1, Math.ceil((rows - 1) / 6))) rowMarks.push(row);
+        if (rowMarks.at(-1) !== rows - 1) rowMarks.push(rows - 1);
+        for (const block of blockMarks) {
+          const x = origin.x + (block + 0.5) * cellSize;
+          tickPoints.push(new THREE.Vector3(x, 0, origin.z - 0.14), new THREE.Vector3(x, 0, origin.z + 0.14));
+        }
+        for (const row of rowMarks) {
+          const z = origin.z + (row + 0.5) * cellSize;
+          tickPoints.push(new THREE.Vector3(origin.x - 0.14, 0, z), new THREE.Vector3(origin.x + 0.14, 0, z));
+        }
+        for (const height of [0, 1, 2, 3]) {
+          tickPoints.push(new THREE.Vector3(origin.x - 0.14, height, origin.z),
+            new THREE.Vector3(origin.x + 0.14, height, origin.z));
+        }
+        const ticks = new THREE.LineSegments(
+          new THREE.BufferGeometry().setFromPoints(tickPoints),
+          new THREE.LineBasicMaterial({ color: 0x425750 }),
+        );
+        scene.add(ticks);
+        const labels = [];
+        const addAxisLabel = (text, position, color, size = 2.7) => {
+          const canvas = document.createElement("canvas");
+          canvas.width = 384;
+          canvas.height = 96;
+          const context = canvas.getContext("2d");
+          context.font = "600 40px Segoe UI";
+          context.textAlign = "center";
+          context.textBaseline = "middle";
+          context.fillStyle = color;
+          context.fillText(text, 192, 48, 376);
+          const texture = new THREE.CanvasTexture(canvas);
+          const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }));
+          sprite.position.copy(position);
+          sprite.scale.set(size, size / 4, 1);
+          scene.add(sprite);
+          labels.push({ texture, sprite });
+        };
+        for (const block of blockMarks) {
+          addAxisLabel(String(block), origin.clone().add(new THREE.Vector3((block + 0.5) * cellSize, 0.1, -0.45)), "#176b50", 0.85);
+        }
+        for (const row of rowMarks) {
+          addAxisLabel(String(row), origin.clone().add(new THREE.Vector3(-0.45, 0.1, (row + 0.5) * cellSize)), "#326c98", 0.85);
+        }
+        for (const height of [0, 1, 2, 3]) {
+          const value = logMaximum > 0 ? smallestPositive * Math.expm1(height / 3 * logMaximum) : 0;
+          addAxisLabel(formatError(value), origin.clone().add(new THREE.Vector3(-0.8, height, -0.2)), "#ad432f", 1.1);
+        }
+        addAxisLabel("BLOCK (32)", origin.clone().add(new THREE.Vector3(blockSpan + 0.9, 0.2, 0)), "#176b50");
+        addAxisLabel("ROW", origin.clone().add(new THREE.Vector3(0, 0.2, rowSpan + 0.9)), "#326c98");
+        addAxisLabel("RMSE (LOG)", origin.clone().add(new THREE.Vector3(0, 4.0, 0)), "#ad432f");
+
+        const camera = new THREE.PerspectiveCamera(45, 1, 0.1, Math.max(1000, blocks * 10));
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.enablePan = true;
+        controls.minDistance = 0.5;
+        const radius = Math.hypot(blockSpan + 3, rowSpan + 3, 6) / 2;
+        const resize = () => {
+          const width = Math.max(host.clientWidth, 1);
+          const height = Math.max(host.clientHeight, 1);
+          renderer.setSize(width, height);
+          camera.aspect = width / height;
+          camera.updateProjectionMatrix();
+        };
+        resize();
+        const distance = Math.max(8, radius / Math.sin(Math.PI / 8) * 1.3 / Math.min(1, camera.aspect));
+        camera.position.set(distance * 0.65, distance * 0.58, distance * 0.9);
+        controls.target.set(0, 1, 0);
+        controls.update();
+        let savedView;
+        let quarterTurns = 0;
+        const vertical = new THREE.Vector3(0, 1, 0);
+        const toggleView = () => {
+          if (!savedView) {
+            savedView = { position: camera.position.clone(), target: controls.target.clone(), up: camera.up.clone() };
+            camera.up.set(0, 0, -1).applyAxisAngle(vertical, quarterTurns * Math.PI / 2);
+            camera.position.copy(controls.target).add(new THREE.Vector3(0, distance, 0));
+            controls.enableRotate = false;
+            viewButton.textContent = "3D view";
+            rotateButton.hidden = false;
+          } else {
+            camera.position.copy(savedView.position);
+            controls.target.copy(savedView.target);
+            camera.up.copy(savedView.up);
+            controls.enableRotate = true;
+            savedView = null;
+            viewButton.textContent = "Top view";
+            rotateButton.hidden = true;
+          }
+          camera.lookAt(controls.target);
+          controls.update();
+        };
+        const rotateView = () => {
+          if (!savedView) return;
+          quarterTurns = (quarterTurns + 1) % 4;
+          camera.up.applyAxisAngle(vertical, Math.PI / 2);
+          camera.lookAt(controls.target);
+          controls.update();
+        };
+        viewButton.disabled = false;
+        rotateButton.disabled = false;
+        viewButton.addEventListener("click", toggleView);
+        rotateButton.addEventListener("click", rotateView);
+        const observer = new ResizeObserver(resize);
+        observer.observe(host);
+        const raycaster = new THREE.Raycaster();
+        const pointer = new THREE.Vector2();
+        const showValue = (event) => {
+          const bounds = renderer.domElement.getBoundingClientRect();
+          pointer.set((event.clientX - bounds.left) / bounds.width * 2 - 1,
+            1 - (event.clientY - bounds.top) / bounds.height * 2);
+          raycaster.setFromCamera(pointer, camera);
+          const hit = raycaster.intersectObject(bars)[0];
+          tooltip.hidden = !hit;
+          if (!hit) return;
+          const block = Math.floor(hit.instanceId / rows);
+          const row = hit.instanceId % rows;
+          const blockId = Math.floor(block * 32 / quantizer.n_per_block);
+          const elementStart = block * 32 % quantizer.n_per_block;
+          tooltip.textContent = `Row ${row} · Block ${blockId} (elements ${elementStart}–${elementStart + 31}) · RMSE ${formatError(error.blk32_error[block][row])}`;
+          tooltip.style.left = `${Math.min(event.clientX - bounds.left + 14, host.clientWidth - tooltip.offsetWidth - 12)}px`;
+          tooltip.style.top = `${Math.min(event.clientY - bounds.top + 14, host.clientHeight - tooltip.offsetHeight - 12)}px`;
+        };
+        renderer.domElement.addEventListener("pointermove", showValue);
+        renderer.domElement.addEventListener("pointerleave", () => { tooltip.hidden = true; });
+        let frame;
+        const draw = () => {
+          frame = requestAnimationFrame(draw);
+          controls.update();
+          renderer.render(scene, camera);
+        };
+        draw();
+        disposeBlockChart = () => {
+          cancelAnimationFrame(frame);
+          observer.disconnect();
+          controls.dispose();
+          viewButton.removeEventListener("click", toggleView);
+          rotateButton.removeEventListener("click", rotateView);
+          geometry.dispose();
+          material.dispose();
+          grid.geometry.dispose();
+          grid.material.dispose();
+          for (const axis of axes) axis.dispose();
+          ticks.geometry.dispose();
+          ticks.material.dispose();
+          for (const { texture, sprite } of labels) {
+            texture.dispose();
+            sprite.material.dispose();
+          }
+          renderer.dispose();
+          renderer.domElement.remove();
+          tooltip.hidden = true;
+        };
+        status.hidden = true;
+      } catch (failure) {
+        if (request !== chartRequest) return;
+        status.className = "block-status status error";
+        status.textContent = `Unable to display 3D chart: ${failure instanceof Error ? failure.message : String(failure)}`;
+      }
+    }
+
+    function closeBlockChart() {
+      ++chartRequest;
+      if (disposeBlockChart) disposeBlockChart();
+      disposeBlockChart = null;
+      document.querySelector("#block-overlay").hidden = true;
+    }
+
+    async function inspectSelection() {
+      const selectedRows = [...wasmList.querySelectorAll('.quantizer-row[aria-selected="true"]:not(.is-incompatible)')];
+      if (!selectedTensor || !selectedRows.length) return;
+      const status = document.querySelector("#inspect-status");
+      status.className = "status inspect-status";
+      status.textContent = "";
+      const width = selectedTensor.shape[0];
+      const nrows = Math.min(128, selectedTensor.shape.slice(1).reduce((product, dimension) => product * dimension, 1));
+      if (!width || !nrows) {
+        status.className = "status inspect-status error";
+        status.textContent = "The selected tensor must contain at least one nonempty row.";
+        return;
+      }
+
+      const button = document.querySelector("#inspect-button");
+      const overlay = document.querySelector("#waiting-overlay");
+      const progress = overlay.querySelector("span");
+      button.disabled = true;
+      progress.textContent = "Reading tensor...";
+      overlay.hidden = false;
+      try {
+        await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+        const source = await safeTensorToFloat32(selectedTensor);
+        const quantizers = selectedRows.map((row) => row.quantizer);
+        const results = [];
+        for (const [index, quantizer] of quantizers.entries()) {
+          progress.textContent = `Computing ${quantizer.name} (${index + 1}/${quantizers.length})...`;
+          await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+          const quantized = quantizer.quantize(source, nrows, width);
+          const restored = quantizer.dequantize(quantized, nrows, width);
+          results.push({
+            error: calc_error(source, restored, nrows, width, quantizer.n_per_block),
+            bpw: quantized.byteLength * 8 / source.length,
+          });
+        }
+        renderResults(selectedTensor, quantizers, results, nrows, width);
+        document.querySelector("#setup-view").hidden = true;
+        document.querySelector("#results-view").hidden = false;
+      } catch (error) {
+        status.className = "status inspect-status error";
+        status.textContent = `Inspection failed: ${error instanceof Error ? error.message : String(error)}`;
+      } finally {
+        overlay.hidden = true;
+        button.disabled = false;
+      }
+    }
+
+    window.addEventListener("dragover", (event) => event.preventDefault());
+    window.addEventListener("drop", (event) => event.preventDefault());
+    setupDropZone("tensor", loadTensorFile);
+    setupDropZone("wasm", loadWasmFile);
+    for (const button of document.querySelectorAll(".tensor-filter")) button.addEventListener("click", () => {
+      button.setAttribute("aria-pressed", String(button.getAttribute("aria-pressed") !== "true"));
+      filterTensors();
+    });
+    document.querySelector("#inspect-button").addEventListener("click", inspectSelection);
+    document.querySelector("#close-results").addEventListener("click", () => {
+      document.querySelector("#results-view").hidden = true;
+      document.querySelector("#setup-view").hidden = false;
+    });
+    document.querySelector("#close-block").addEventListener("click", closeBlockChart);
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !document.querySelector("#block-overlay").hidden) closeBlockChart();
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WASM Quantizer Inspector</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: "Segoe UI", sans-serif;
+      color: #1d2924;
+      background: #f3f6f4;
+    }
+
+    * { box-sizing: border-box; }
+
+    body { margin: 0; }
+
+    main {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 36px 24px 56px;
+    }
+
+    header, .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    h1 { margin: 0; font-size: 24px; font-weight: 650; }
+
+    button {
+      border: 0;
+      border-radius: 5px;
+      padding: 10px 15px;
+      color: #fff;
+      background: #176b50;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    button:hover { background: #11583f; }
+    button:disabled { cursor: wait; opacity: .65; }
+
+    .sort-button {
+      border: 0;
+      padding: 0;
+      color: inherit;
+      background: transparent;
+      font: inherit;
+      font-weight: inherit;
+    }
+
+    .sort-button:hover { color: #176b50; background: transparent; }
+    .sort-button:focus-visible { outline: 2px solid #176b50; outline-offset: 3px; }
+    .sort-indicator { margin-left: 4px; font-size: 11px; }
+
+    .drop-zone {
+      margin: 24px 0;
+      padding: 28px 16px;
+      border: 1px dashed #9aa9a1;
+      border-radius: 6px;
+      color: #52645a;
+      background: #fff;
+      text-align: center;
+      transition: border-color .15s, background-color .15s;
+    }
+
+    .drop-zone.is-over {
+      border-color: #176b50;
+      background: #e8f3ed;
+    }
+
+    #status {
+      min-height: 20px;
+      color: #5c6b63;
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+
+    #status.success { color: #176b50; }
+    #status.error { color: #a23232; }
+
+    .table-wrap { overflow-x: auto; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #fff;
+      font-size: 14px;
+      text-align: left;
+    }
+
+    th, td {
+      padding: 11px 14px;
+      border-bottom: 1px solid #e4e9e6;
+      white-space: nowrap;
+    }
+
+    th {
+      color: #52645a;
+      background: #e9efeb;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    td:first-child { font-family: Consolas, monospace; font-weight: 600; }
+    .present { color: #176b50; }
+    .missing { color: #a23232; }
+    .test-button { padding: 6px 10px; font-size: 12px; }
+    .test-button:disabled { cursor: not-allowed; }
+    .test-result { font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+    @media (max-width: 600px) {
+      main { padding: 24px 14px 40px; }
+      header { align-items: flex-start; }
+      h1 { font-size: 20px; }
+      th, td { padding: 10px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>WASM Quantizer Inspector</h1>
+      <button id="load-button" type="button">Choose WASM File</button>
+      <input id="file-input" type="file" accept=".wasm,application/wasm" hidden>
+    </header>
+
+    <div id="drop-zone" class="drop-zone">Drop a .wasm file here</div>
+    <div id="status" role="status" aria-live="polite">No file loaded</div>
+
+    <div class="table-wrap">
+      <table id="types-table" hidden>
+        <thead>
+          <tr>
+            <th scope="col" data-sort="name" aria-sort="ascending"><button class="sort-button" data-sort="name" type="button">Type<span class="sort-indicator" aria-hidden="true">↑</span></button></th>
+            <th scope="col" data-sort="n_per_block" aria-sort="none"><button class="sort-button" data-sort="n_per_block" type="button">Elements per block<span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+            <th scope="col" data-sort="block_size" aria-sort="none"><button class="sort-button" data-sort="block_size" type="button">Block size (bytes)<span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+            <th scope="col" data-sort="row_meta_size" aria-sort="none"><button class="sort-button" data-sort="row_meta_size" type="button">Row metadata (bytes)<span class="sort-indicator" aria-hidden="true">↕</span></button></th>
+            <th scope="col">quantize</th>
+            <th scope="col">dequantize</th>
+            <th scope="col">Test</th>
+          </tr>
+        </thead>
+        <tbody id="types-body"></tbody>
+      </table>
+    </div>
+  </main>
+
+  <script src="./load_quantizer.js"></script>
+  <script type="module">
+    import mt19937 from "https://cdn.jsdelivr.net/npm/@stdlib/random-base-mt19937@0.2.3/+esm";
+    import normal from "https://cdn.jsdelivr.net/npm/@stdlib/random-base-normal@0.2.2/+esm";
+    import studentTDistribution from "https://cdn.jsdelivr.net/npm/@stdlib/random-base-t@0.2.2/+esm";
+    import bernoulli from "https://cdn.jsdelivr.net/npm/@stdlib/random-base-bernoulli@0.2.2/+esm";
+
+    const loadButton = document.querySelector("#load-button");
+    const fileInput = document.querySelector("#file-input");
+    const dropZone = document.querySelector("#drop-zone");
+    const status = document.querySelector("#status");
+    const table = document.querySelector("#types-table");
+    const tableBody = document.querySelector("#types-body");
+    const sortHeaders = table.querySelectorAll("th[data-sort]");
+    let entries = [];
+    let sortKey = "name";
+    let sortDirection = "asc";
+    const testRows = 64;
+    const testElementsPerRow = 4096;
+    let testInput;
+    const uniformRandom = mt19937.factory({ seed: 42 }).normalized;
+    const gaussian = normal.factory(0, 1, { prng: uniformRandom });
+    const studentT = studentTDistribution.factory(3, { prng: uniformRandom });
+    const heavyTail = bernoulli.factory(0.05, { prng: uniformRandom });
+    const outlier = bernoulli.factory(0.001, { prng: uniformRandom });
+
+    function generateLlmWeights(size, fanIn) {
+      const weights = new Float32Array(size);
+      const fanInScale = 1 / Math.sqrt(Math.max(fanIn, 1));
+      const studentTScale = Math.sqrt(1 / 3);
+
+      for (let index = 0; index < size; index++) {
+        const gaussianValue = gaussian();
+        const studentTValue = studentT() * studentTScale;
+        let value = (heavyTail() ? studentTValue : gaussianValue) * fanInScale;
+        if (outlier()) value *= 10;
+        weights[index] = value;
+      }
+
+      return weights;
+    }
+
+    function addCell(row, value, className = "") {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      if (className) cell.className = className;
+      row.append(cell);
+    }
+
+    function addMethodCell(row, method) {
+      addCell(row, typeof method === "function" ? "Present" : "Missing",
+        typeof method === "function" ? "present" : "missing");
+    }
+
+    function addTestCell(row, item) {
+      const cell = document.createElement("td");
+      const button = document.createElement("button");
+      const canTest = typeof item.quantizer === "function" && typeof item.dequantizer === "function";
+      button.className = "test-button";
+      button.type = "button";
+      button.textContent = "Test";
+      button.disabled = !canTest;
+
+      if (canTest) {
+        button.addEventListener("click", () => runQuantizerTest(item, button));
+      } else {
+        button.title = "Requires both quantize and dequantize exports";
+      }
+
+      cell.append(button);
+      row.append(cell);
+    }
+
+    async function runQuantizerTest(item, button) {
+      button.disabled = true;
+      button.textContent = "Testing...";
+
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (!testInput) {
+          testInput = generateLlmWeights(testRows * testElementsPerRow, testElementsPerRow);
+        }
+
+        const quantized = item.quantize(testInput, testRows, testElementsPerRow);
+        const reconstructed = item.dequantize(quantized, testRows, testElementsPerRow);
+        const errors = calc_error(testInput, reconstructed,
+          testRows, testElementsPerRow, item.n_per_block).row_error;
+        let maxError = 0;
+        let errorSum = 0;
+
+        for (const error of errors) {
+          if (error > maxError) maxError = error;
+          errorSum += error;
+        }
+
+        const averageError = errorSum / errors.length;
+        const result = document.createElement("span");
+        result.className = "test-result";
+        result.textContent = `max ${maxError.toExponential(3)} / avg ${averageError.toExponential(3)}`;
+        result.title = `Maximum row RMSE: ${maxError}; average row RMSE: ${averageError}`;
+        button.replaceWith(result);
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = "Failed";
+        button.title = error instanceof Error ? error.message : String(error);
+      }
+    }
+
+    function renderEntries() {
+      tableBody.replaceChildren();
+      const sortedEntries = [...entries].sort((left, right) => {
+        const comparison = sortKey === "name"
+          ? left.name.localeCompare(right.name)
+          : left[sortKey] - right[sortKey];
+        return sortDirection === "asc" ? comparison : -comparison;
+      });
+
+      for (const item of sortedEntries) {
+        const row = document.createElement("tr");
+        addCell(row, item.name);
+        addCell(row, item.n_per_block);
+        addCell(row, item.block_size);
+        addCell(row, item.row_meta_size);
+        addMethodCell(row, item.quantizer);
+        addMethodCell(row, item.dequantizer);
+        addTestCell(row, item);
+        tableBody.append(row);
+      }
+
+      if (entries.length === 0) {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.colSpan = 7;
+        cell.textContent = "No info_<type> exports found";
+        row.append(cell);
+        tableBody.append(row);
+      }
+
+      for (const header of sortHeaders) {
+        const active = header.dataset.sort === sortKey;
+        header.setAttribute("aria-sort", active
+          ? (sortDirection === "asc" ? "ascending" : "descending")
+          : "none");
+        header.querySelector(".sort-indicator").textContent = active
+          ? (sortDirection === "asc" ? "↑" : "↓")
+          : "↕";
+      }
+    }
+
+    for (const button of table.querySelectorAll(".sort-button")) {
+      button.addEventListener("click", () => {
+        const nextKey = button.dataset.sort;
+        if (sortKey === nextKey) {
+          sortDirection = sortDirection === "asc" ? "desc" : "asc";
+        } else {
+          sortKey = nextKey;
+          sortDirection = "asc";
+        }
+        renderEntries();
+      });
+    }
+
+    async function loadFile(file) {
+      if (!file) return;
+
+      loadButton.disabled = true;
+      table.hidden = true;
+      tableBody.replaceChildren();
+      entries = [];
+      status.className = "";
+      status.textContent = `Loading ${file.name}...`;
+
+      try {
+        const quantizers = await loadQuantizer(await file.arrayBuffer());
+        entries = Object.values(quantizers);
+        renderEntries();
+
+        table.hidden = false;
+        status.className = "success";
+        status.textContent = `${file.name} · ${entries.length} types loaded`;
+      } catch (error) {
+        status.className = "error";
+        status.textContent = `Failed to load: ${error instanceof Error ? error.message : String(error)}`;
+      } finally {
+        loadButton.disabled = false;
+        fileInput.value = "";
+      }
+    }
+
+    loadButton.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", () => loadFile(fileInput.files[0]));
+
+    for (const eventName of ["dragenter", "dragover"]) {
+      dropZone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        dropZone.classList.add("is-over");
+      });
+    }
+
+    for (const eventName of ["dragleave", "drop"]) {
+      dropZone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        dropZone.classList.remove("is-over");
+      });
+    }
+
+    dropZone.addEventListener("drop", (event) => loadFile(event.dataTransfer.files[0]));
+  </script>
+</body>
+</html>
